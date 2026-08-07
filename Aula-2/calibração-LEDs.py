@@ -3,55 +3,39 @@ import serial.tools.list_ports
 import tkinter as tk
 from tkinter import messagebox
 
-#Essa porta deve ser trocada para a mesma em que o microcontrolador
 PORTA = '/dev/ttyUSB0'
 BAUD = 9600
 
-# Calibração: preencha após medir leite no béquer (branco)
-# e uma referência escura (preto). Valores são raw do sensor.
-# Formato: (raw_branco, raw_preto) para cada canal.
+# Preencha com os valores raw medidos para cada cor.
+# Aponte cada LED diretamente ao sensor e anote os valores exibidos em "Raw:".
+REFERENCIAS = {
+    'vermelho': (2, 50, 2),
+    'verde':    (15, 2, 1),
+    'azul':     (55, 5, 0),
+    'branco':   (10, 10, 5),
+    'preto':    (30000, 200000, 33000),
+}
 
-######################################################
-#       branco   preto
-######################################################
+# Cores HTML exibidas no canvas para cada referência classificada
+COR_DISPLAY = {
+    'vermelho': '#ff0000',
+    'verde':    '#00ff00',
+    'azul':     '#0000ff',
+    'branco':   '#ffffff',
+    'preto':    '#111111',
+}
 
-CAL ={
-    'R': (30,  1270),
-    'G': (30,  3000),
-    'B': (10,  900),
-} 
+def distancia(a, b):
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
-def validar_calibracao():
-    for canal, (branco, preto) in CAL.items():
-        if branco >= preto:
-            raise ValueError(
-                f"Calibração inválida para canal {canal}: "
-                f"branco ({branco}) deve ser menor que preto ({preto})."
-            )
-        if (preto - branco) < 50:
-            print(
-                f"Aviso: intervalo de calibração estreito para canal {canal} "
-                f"({preto - branco} unidades). Considere recalibrar."
-            )
-
-def mapear(val, branco, preto):
-    val = max(branco, min(preto, val))
-    normalizado = (val - branco) / (preto - branco)
-    return round((1 - normalizado) * 255)
-
-def raw_para_rgb(r, g, b):
-    return (
-        mapear(r, *CAL['R']),
-        mapear(g, *CAL['G']),
-        mapear(b, *CAL['B']),
-    )
+def classificar(r_raw, g_raw, b_raw):
+    leitura = (r_raw, g_raw, b_raw)
+    return min(REFERENCIAS, key=lambda cor: distancia(leitura, REFERENCIAS[cor]))
 
 def rgb_para_hex(r, g, b):
     return f'#{r:02x}{g:02x}{b:02x}'
 
 def iniciar():
-    validar_calibracao()
-
     try:
         ser = serial.Serial(PORTA, BAUD, timeout=2)
     except serial.SerialException:
@@ -60,48 +44,52 @@ def iniciar():
         messagebox.showerror("Erro de conexão", msg)
         return
 
-    historico = []  # lista de (r_raw, g_raw, b_raw, hex)
+    historico = []  # lista de (r_raw, g_raw, b_raw, cor_display_hex)
 
     janela = tk.Tk()
     janela.title("Leitura de cor - TCS3200")
-    janela.geometry("500x450")
+    janela.geometry("500x500")
 
     canvas = tk.Canvas(janela, width=500, height=150, bg='#888888')
     canvas.pack()
 
-    label_rgb = tk.Label(janela, text="Aguardando leitura...", font=("Courier", 12))
-    label_rgb.pack(pady=4)
+    label_cor = tk.Label(janela, text="Aguardando leitura...", font=("Courier", 14))
+    label_cor.pack(pady=4)
 
     label_raw = tk.Label(janela, text="", font=("Courier", 10), fg="gray")
     label_raw.pack()
 
     frame_hist = tk.Frame(janela)
     frame_hist.pack(pady=8)
-
     tk.Label(frame_hist, text="Histórico (últimas 5 leituras):", font=("Courier", 10)).pack()
-
     historico_canvas = tk.Canvas(frame_hist, width=500, height=50)
     historico_canvas.pack()
 
+    label_hist_nomes = tk.Label(frame_hist, text="", font=("Courier", 9), fg="gray")
+    label_hist_nomes.pack()
+
     def atualizar_historico():
         historico_canvas.delete("all")
-        n = len(historico)
         largura = 500 // 5
-        for idx, (_, _, _, cor_hex) in enumerate(historico[-5:]):
+        ultimos = historico[-5:]
+        nomes = []
+        for idx, (_, _, _, cor_hex, nome) in enumerate(ultimos):
             x0 = idx * largura
             historico_canvas.create_rectangle(x0, 0, x0 + largura, 50, fill=cor_hex, outline="white")
+            nomes.append(nome)
+        label_hist_nomes.config(text="  |  ".join(nomes))
 
     def atualizar():
         linha = ser.readline().decode('utf-8', errors='ignore').strip()
         if linha.count(',') == 2:
             try:
                 r_raw, g_raw, b_raw = map(int, linha.split(','))
-                r, g, b = raw_para_rgb(r_raw, g_raw, b_raw)
-                cor = rgb_para_hex(r, g, b)
-                canvas.config(bg=cor)
-                label_rgb.config(text=f"RGB: ({r}, {g}, {b})  HEX: {cor}")
+                nome = classificar(r_raw, g_raw, b_raw)
+                cor_hex = COR_DISPLAY[nome]
+                canvas.config(bg=cor_hex)
+                label_cor.config(text=f"Cor: {nome}")
                 label_raw.config(text=f"Raw: R={r_raw}  G={g_raw}  B={b_raw}")
-                historico.append((r_raw, g_raw, b_raw, cor))
+                historico.append((r_raw, g_raw, b_raw, cor_hex, nome))
                 atualizar_historico()
             except ValueError:
                 pass
