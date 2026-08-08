@@ -119,17 +119,23 @@ Comando classificarCor(
 
     switch (indiceMaisProximo) {
 
+            // CMD_FRENTE   = 0,
+            // CMD_RE       = 1,
+            // CMD_DIREITA  = 2,
+            // CMD_ESQUERDA = 3,
+            // CMD_PARAR    = 4,
+
         case 0: // vermelho
             return CMD_RE;
 
         case 1: // verde
-            return CMD_DIREITA;
+            return CMD_FRENTE;
 
         case 2: // azul
             return CMD_ESQUERDA;
 
         case 3: // branco
-            return CMD_FRENTE;
+            return CMD_DIREITA;
 
         case 4: // preto
             return CMD_PARAR;
