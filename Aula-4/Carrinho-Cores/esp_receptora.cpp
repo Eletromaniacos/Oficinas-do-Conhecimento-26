@@ -3,12 +3,12 @@
 #include <WiFi.h>
 
 // Pinos L298N
-const int IN1 = 14;
-const int IN2 = 27;
-const int IN3 = 26;
-const int IN4 = 25;
-const int ENA = 32;
-const int ENB = 33;
+const int ENA = 14;
+const int IN1 = 27;
+const int IN2 = 26;
+const int IN3 = 25;
+const int IN4 = 33;
+const int ENB = 35;
 
 // Canais PWM (ESP32 exige canal lógico para ledcWrite)
 const int CANAL_A = 0;
@@ -84,12 +84,15 @@ void onRecebimento(const uint8_t *mac, const uint8_t *dados, int len) {
   Pacote pacote;
   memcpy(&pacote, dados, sizeof(Pacote));
 
+  Serial.print(pacote.cmd);
+  Serial.print(" ");
+
   switch (pacote.cmd) {
-    case CMD_FRENTE:   frente();       break;
-    case CMD_RE:       re();           break;
-    case CMD_DIREITA:  direita();      break;
-    case CMD_ESQUERDA: esquerda();     break;
-    case CMD_PARAR:    pararMotores(); break;
+    case CMD_FRENTE:   Serial.println("Frente"); frente();       break;
+    case CMD_RE:       Serial.println("Ré"); re();           break;
+    case CMD_DIREITA:  Serial.println("Direita"); direita();      break;
+    case CMD_ESQUERDA: Serial.println("Esquerda"); esquerda();     break;
+    case CMD_PARAR:    Serial.println("Pare"); pararMotores(); break;
   }
 }
 
