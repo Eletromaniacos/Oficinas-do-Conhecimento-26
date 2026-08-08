@@ -2,114 +2,233 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
-// MAC da ESP32 receptora (carrinho) — substitua pelos valores reais
-uint8_t macReceptora[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+// MAC da ESP32 receptora (carrinho)
+uint8_t macReceptora[] = {
+    0x08, 0x3A, 0xF2, 0xAB, 0x6F, 0x68
+};
 
 // Pinos do TCS3200
 const int S2 = 27;
 const int S3 = 26;
 const int sensorOut = 13;
 
-// Calibração: ajuste conforme seu ambiente
-const long CAL_R_BRANCO = 20,  CAL_R_PRETO = 150;
-const long CAL_G_BRANCO = 20,  CAL_G_PRETO = 232;
-const long CAL_B_BRANCO = 20,  CAL_B_PRETO = 250;
+// --------------------------------------------------
+// Referências de calibração
+// Valores RAW medidos diretamente pelo TCS3200
+// --------------------------------------------------
 
-// Limiares para classificação de cor (0–255 após calibração)
-// Ajuste conforme os valores RGB que seu sensor produz para cada LED
-const int LIMIAR_BRANCO_MIN = 200; // R, G e B acima disso → branco
-const int LIMIAR_PRETO_MAX  = 30;  // R, G e B abaixo disso → preto
-const int LIMIAR_COR_MIN    = 100; // canal dominante deve superar isso
+struct ReferenciaCor {
+    const char* nome;
+    long r;
+    long g;
+    long b;
+};
 
+const ReferenciaCor REFERENCIAS[] = {
+    {"vermelho", 2,     50,      2},
+    {"verde",    15,    2,       1},
+    {"azul",     55,    5,       0},
+    {"branco",   10,    10,      5},
+    {"preto",    30000, 200000, 33000}
+};
+
+constexpr int NUM_REFERENCIAS = 5;
+
+// --------------------------------------------------
 // Comandos enviados ao carrinho
+// --------------------------------------------------
+
 typedef enum : uint8_t {
-  CMD_FRENTE  = 0,
-  CMD_RE      = 1,
-  CMD_DIREITA = 2,
-  CMD_ESQUERDA= 3,
-  CMD_PARAR   = 4,
+    CMD_FRENTE   = 0,
+    CMD_RE       = 1,
+    CMD_DIREITA  = 2,
+    CMD_ESQUERDA = 3,
+    CMD_PARAR    = 4,
 } Comando;
 
 typedef struct {
-  Comando cmd;
+    Comando cmd;
 } Pacote;
 
 Pacote pacote;
 
-void onEnvio(const uint8_t *mac, esp_now_send_status_t status) {
-  // Callback opcional — útil para debug
-  Serial.print("Envio: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FALHA");
+// --------------------------------------------------
+// Callback de envio
+// --------------------------------------------------
+
+void onEnvio(
+    const uint8_t* mac,
+    esp_now_send_status_t status
+) {
+    Serial.print("Envio: ");
+    Serial.println(
+        status == ESP_NOW_SEND_SUCCESS ? "OK" : "FALHA"
+    );
 }
 
-int mapear(long val, long branco, long preto) {
-  val = max(branco, min(preto, val));
-  float normalizado = (float)(val - branco) / (preto - branco);
-  return round((1.0 - normalizado) * 255);
+// --------------------------------------------------
+// Distância euclidiana entre a leitura e uma referência
+// --------------------------------------------------
+
+double distancia(
+    long r,
+    long g,
+    long b,
+    const ReferenciaCor& referencia
+) {
+    double dr = (double)r - referencia.r;
+    double dg = (double)g - referencia.g;
+    double db = (double)b - referencia.b;
+
+    return sqrt(
+        dr * dr +
+        dg * dg +
+        db * db
+    );
 }
 
-Comando classificarCor(int r, int g, int b) {
-  if (r > LIMIAR_BRANCO_MIN && g > LIMIAR_BRANCO_MIN && b > LIMIAR_BRANCO_MIN)
-    return CMD_FRENTE;
-  if (r < LIMIAR_PRETO_MAX && g < LIMIAR_PRETO_MAX && b < LIMIAR_PRETO_MAX)
-    return CMD_PARAR;
-  if (r > g && r > b && r > LIMIAR_COR_MIN)
-    return CMD_RE;
-  if (g > r && g > b && g > LIMIAR_COR_MIN)
-    return CMD_DIREITA;
-  if (b > r && b > g && b > LIMIAR_COR_MIN)
-    return CMD_ESQUERDA;
-  return CMD_PARAR;
+// --------------------------------------------------
+// Classificação pela referência mais próxima
+// --------------------------------------------------
+
+Comando classificarCor(
+    long r,
+    long g,
+    long b
+) {
+    double menorDistancia = INFINITY;
+    int indiceMaisProximo = 0;
+
+    for (int i = 0; i < NUM_REFERENCIAS; i++) {
+
+        double d = distancia(
+            r,
+            g,
+            b,
+            REFERENCIAS[i]
+        );
+
+        if (d < menorDistancia) {
+            menorDistancia = d;
+            indiceMaisProximo = i;
+        }
+    }
+
+    Serial.print("Cor: ");
+    Serial.println(REFERENCIAS[indiceMaisProximo].nome);
+
+    switch (indiceMaisProximo) {
+
+        case 0: // vermelho
+            return CMD_RE;
+
+        case 1: // verde
+            return CMD_DIREITA;
+
+        case 2: // azul
+            return CMD_ESQUERDA;
+
+        case 3: // branco
+            return CMD_FRENTE;
+
+        case 4: // preto
+            return CMD_PARAR;
+
+        default:
+            return CMD_PARAR;
+    }
 }
+
+// --------------------------------------------------
+// Setup
+// --------------------------------------------------
 
 void setup() {
-  Serial.begin(9600);
 
-  pinMode(S2, OUTPUT);
-  pinMode(S3, OUTPUT);
-  pinMode(sensorOut, INPUT);
+    Serial.begin(9600);
 
-  WiFi.mode(WIFI_STA);
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Erro ao inicializar ESP-NOW");
-    return;
-  }
-  esp_now_register_send_cb(onEnvio);
+    pinMode(S2, OUTPUT);
+    pinMode(S3, OUTPUT);
+    pinMode(sensorOut, INPUT);
 
-  esp_now_peer_info_t peer = {};
-  memcpy(peer.peer_addr, macReceptora, 6);
-  peer.channel = 0;
-  peer.encrypt = false;
-  esp_now_add_peer(&peer);
+    WiFi.mode(WIFI_STA);
+
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Erro ao inicializar ESP-NOW");
+        return;
+    }
+
+    esp_now_register_send_cb(onEnvio);
+
+    esp_now_peer_info_t peer = {};
+
+    memcpy(
+        peer.peer_addr,
+        macReceptora,
+        6
+    );
+
+    peer.channel = 0;
+    peer.encrypt = false;
+
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+        Serial.println("Erro ao adicionar peer");
+        return;
+    }
 }
 
+// --------------------------------------------------
+// Loop
+// --------------------------------------------------
+
 void loop() {
-  long sumR = 0, sumG = 0, sumB = 0;
 
-  for (int i = 0; i < 10; i++) {
-    digitalWrite(S2, LOW);
-    digitalWrite(S3, LOW);
-    sumR += pulseIn(sensorOut, LOW);
+    long sumR = 0;
+    long sumG = 0;
+    long sumB = 0;
 
-    digitalWrite(S2, HIGH);
-    digitalWrite(S3, HIGH);
-    sumG += pulseIn(sensorOut, LOW);
+    // Média de 10 leituras
+    for (int i = 0; i < 10; i++) {
 
-    digitalWrite(S2, LOW);
-    digitalWrite(S3, HIGH);
-    sumB += pulseIn(sensorOut, LOW);
+        // Vermelho
+        digitalWrite(S2, LOW);
+        digitalWrite(S3, LOW);
 
-    delay(100);
-  }
+        sumR += pulseIn(sensorOut, LOW);
 
-  int r = mapear(sumR / 10, CAL_R_BRANCO, CAL_R_PRETO);
-  int g = mapear(sumG / 10, CAL_G_BRANCO, CAL_G_PRETO);
-  int b = mapear(sumB / 10, CAL_B_BRANCO, CAL_B_PRETO);
+        // Verde
+        digitalWrite(S2, HIGH);
+        digitalWrite(S3, HIGH);
 
-  Serial.printf("RGB: (%d, %d, %d)\n", r, g, b);
+        sumG += pulseIn(sensorOut, LOW);
 
-  pacote.cmd = classificarCor(r, g, b);
-  esp_now_send(macReceptora, (uint8_t *)&pacote, sizeof(pacote));
+        // Azul
+        digitalWrite(S2, LOW);
+        digitalWrite(S3, HIGH);
 
-  delay(200);
+        sumB += pulseIn(sensorOut, LOW);
+
+        delay(50);
+    }
+
+    // Valores RAW médios
+    long rRaw = sumR / 10;
+    long gRaw = sumG / 10;
+    long bRaw = sumB / 10;
+
+    // Classifica diretamente usando os valores RAW
+    pacote.cmd = classificarCor(
+        rRaw,
+        gRaw,
+        bRaw
+    );
+
+    // Envia comando para o carrinho
+    esp_now_send(
+        macReceptora,
+        (uint8_t*)&pacote,
+        sizeof(pacote)
+    );
+
+    delay(50);
 }
